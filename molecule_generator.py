@@ -25,11 +25,7 @@ BLOCK_LIBRARY = {
     "碳碳三键": {"atoms": ["C", "C"], "bonds": [(0, 1, T)], "new_slots": [1]},
     
     # --- 官能团 ---
-    "酮羰基": {"atoms": ["C", "O"], "bonds": [(0, 1, D)], "new_slots": [0]},
-    "醛基":   {"atoms": ["C", "O"], "bonds": [(0, 1, D)], "new_slots": []},
-    "羧基":   {"atoms": ["C", "O", "O"], "bonds": [(0, 1, D), (0, 2, S)], "new_slots": []},
-    "酯基":   {"atoms": ["C", "O", "O"], "bonds": [(0, 1, D), (0, 2, S)], "new_slots": [2]},
-    "酰胺基": {"atoms": ["C", "O", "N"], "bonds": [(0, 1, D), (0, 2, S)], "new_slots": [2, 2]},
+    "羰基":   {"atoms": ["C", "O"], "bonds": [(0, 1, D)], "new_slots": [0]},
     "硝基":   {"atoms": ["N", "O", "O"], "bonds": [(0, 1, D), (0, 2, D)], "new_slots": []},
     "氰基":   {"atoms": ["C", "N"], "bonds": [(0, 1, T)], "new_slots": []}
 }

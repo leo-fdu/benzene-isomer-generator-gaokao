@@ -11,24 +11,20 @@ def get_omega_status(c, h, n, o, cl, br):
 BLOCK_LIBRARY = {
     "碳碳双键": {"atoms": {"c": 2}, "omega": 1},
     "碳碳三键": {"atoms": {"c": 2}, "omega": 2},
-    "酯基":     {"atoms": {"c": 1, "o": 2}, "omega": 1},
-    "酰胺基":   {"atoms": {"c": 1, "n": 1, "o": 1}, "omega": 1},
-    "酮羰基":   {"atoms": {"c": 1, "o": 1}, "omega": 1},
-    "醛基": {"atoms": {"c": 1, "o": 1}, "omega": 1},
-    "羧基": {"atoms": {"c": 1, "o": 2}, "omega": 1},
+    "羰基": {"atoms": {"c": 1, "o": 1}, "omega": 1},
     "硝基": {"atoms": {"n": 1, "o": 2}, "omega": 1},
     "氰基": {"atoms": {"c": 1, "n": 1}, "omega": 2}
 }
 
 def get_chain_strategies(rem_c, rem_o, rem_n, rem_omega, constraints):
     results = []
-    # 1. 预处理约束：扣除固定数量的官能团
-    fixed_constraints = {k: v for k, v in constraints.items() if v is not None and v > 0}
+    # 1. 预处理约束：先扣除至少需要出现的结构块
+    minimum_constraints = {k: v for k, v in constraints.items() if v is not None and v > 0}
     forbidden = [k for k, v in constraints.items() if v == 0]
     base_combination = []
     c_left, o_left, n_left, w_left = rem_c, rem_o, rem_n, rem_omega
     
-    for name, count in fixed_constraints.items():
+    for name, count in minimum_constraints.items():
         if name in BLOCK_LIBRARY:
             b = BLOCK_LIBRARY[name]
             for _ in range(count):
@@ -40,11 +36,10 @@ def get_chain_strategies(rem_c, rem_o, rem_n, rem_omega, constraints):
     # 资源合法性初步检查
     if c_left < 0 or o_left < 0 or n_left < 0 or w_left < 0:
         return []
-    # 2. 构造候选池：只放入 omega > 0 的官能团（因为 omega=0 的原子是延伸单元，不参与此处分配）
+    # 2. 构造候选池：只排除被禁止的块；正数约束只表示下界，仍允许额外补充
     available_names = [
         k for k, v in BLOCK_LIBRARY.items() 
-        if k not in forbidden 
-        and k not in fixed_constraints
+        if k not in forbidden
     ]
     # 3. 递归搜索：遍历所有能耗尽 Omega 的组合
     def search(c, o, n, w, start_idx, path):
@@ -76,4 +71,4 @@ def get_chain_strategies(rem_c, rem_o, rem_n, rem_omega, constraints):
     if not results:
         return []
     return results
-#输出示例：[ {  "functional_groups": {"酮羰基":1},  "remaining_atoms": {"c":4,"o":1,"n":0} }, {  "functional_groups": {"酯基":1},  "remaining_atoms": {"c":4,"o":0,"n":0} }]
+#输出示例：[ {  "functional_groups": {"羰基":1},  "remaining_atoms": {"c":4,"o":1,"n":0} }, {  "functional_groups": {"硝基":1},  "remaining_atoms": {"c":5,"o":0,"n":0} }]

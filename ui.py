@@ -13,8 +13,7 @@ ui.py (Streamlit 初稿)
 注意：
 - 当前版本只支持以苯环为唯一核心骨架。
 - UI 支持三种约束输入：留空(不限制) / “无”(等价于0) / “有”(>=1) / 数字(精确等于该数)
-- 对“影响不饱和度的官能团”，preparation 当前只支持“精确/禁止/不限制”，
-  因此“有(>=1)”会被延后到 filter 阶段再判定（不会被误当作“=1”）。
+- preparation 只做下界剪枝；最终是否满足酯/醛/酰胺等条件，仍由 filter 阶段判定。
 """
 
 from __future__ import annotations
@@ -22,6 +21,7 @@ from __future__ import annotations
 import re
 import time
 from dataclasses import dataclass
+from math import ceil
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 import streamlit as st
@@ -104,29 +104,30 @@ COUNT_FEATURE_KEYS = [
 PREPARATION_KEYS = [
     "碳碳双键",
     "碳碳三键",
-    "酮羰基",
-    "醛基",
-    "羧基",
-    "酯基",
-    "酰胺基",
+    "羰基",
     "硝基",
     "氰基",
 ]
 
-MIN_ATOMS_PER_FEATURE: Dict[str, Dict[str, int]] = {
-    "酯基": {"c": 1, "o": 2},
-    "羧基": {"c": 1, "o": 2},
-    "酮羰基": {"c": 1, "o": 1},
-    "醛基": {"c": 1, "o": 1},
-    "非酚羟基": {"o": 1},
-    "酚羟基": {"o": 1},
-    "醚键": {"o": 1},
-    "硝基": {"n": 1, "o": 2},
-    "氰基": {"c": 1, "n": 1},
-    "氨基": {"n": 1},
-    "酰胺基": {"c": 1, "n": 1, "o": 1},
-    "碳碳双键": {"c": 2},
-    "碳碳三键": {"c": 2},
+CARBONYL_PREPARATION_SOURCE_KEYS = ["酯基", "羧基", "酮羰基", "醛基", "酰胺基"]
+NON_CARBONYL_PREPARATION_KEYS = ["碳碳双键", "碳碳三键", "硝基", "氰基"]
+OXYGEN_FEATURE_KEYS = {
+    "酯基",
+    "羧基",
+    "酮羰基",
+    "醛基",
+    "非酚羟基",
+    "酚羟基",
+    "羟基",
+    "醚键",
+    "硝基",
+    "酰胺基",
+}
+NITROGEN_FEATURE_KEYS = {
+    "硝基",
+    "氰基",
+    "氨基",
+    "酰胺基",
 }
 
 
@@ -253,14 +254,45 @@ def build_filter_constraint_specs(
     return constraint_specs
 
 
+def get_lower_bound(spec: CountSpec) -> int:
+    if spec is None or spec == 0:
+        return 0
+    if spec == ">=1":
+        return 1
+    if isinstance(spec, int) and spec > 0:
+        return spec
+    return 0
+
+
+def has_positive_requirement(spec: CountSpec) -> bool:
+    return get_lower_bound(spec) > 0
+
+
+def get_required_carbonyl_lower_bound(filter_constraint_specs: Dict[str, Any]) -> int:
+    total = sum(
+        get_lower_bound(filter_constraint_specs.get(key, None))
+        for key in CARBONYL_PREPARATION_SOURCE_KEYS
+    )
+    return ceil(total / 2)
+
+
+def to_preparation_spec(spec: CountSpec) -> Optional[int]:
+    if spec is None:
+        return None
+    if spec == ">=1":
+        return 1
+    if isinstance(spec, int):
+        return spec
+    return None
+
+
 def to_preparation_constraints(filter_constraint_specs: Dict[str, Any]) -> Dict[str, Optional[int]]:
-    prep_constraints: Dict[str, Optional[int]] = {}
-    for key in PREPARATION_KEYS:
-        spec = filter_constraint_specs.get(key, None)
-        if isinstance(spec, int):
-            prep_constraints[key] = spec
-        else:
-            prep_constraints[key] = None
+    prep_constraints: Dict[str, Optional[int]] = {key: None for key in PREPARATION_KEYS}
+    for key in NON_CARBONYL_PREPARATION_KEYS:
+        prep_constraints[key] = to_preparation_spec(filter_constraint_specs.get(key, None))
+
+    carbonyl_lower_bound = get_required_carbonyl_lower_bound(filter_constraint_specs)
+    prep_constraints["羰基"] = carbonyl_lower_bound if carbonyl_lower_bound > 0 else None
     return prep_constraints
 
 
@@ -283,32 +315,6 @@ def add_halogen_inventory(strategy: Dict[str, Any], rem_cl: int, rem_br: int) ->
     return stg
 
 
-def estimate_min_required_atoms(filter_constraint_specs: Dict[str, Any]) -> Dict[str, int]:
-    required = {"c": 6, "h": 0, "o": 0, "n": 0, "cl": 0, "br": 0}
-
-    total_oh_spec = filter_constraint_specs.get("羟基", None)
-    has_total_oh_constraint = total_oh_spec not in (None, 0)
-
-    for key, atoms in MIN_ATOMS_PER_FEATURE.items():
-        if has_total_oh_constraint and key in {"酚羟基", "非酚羟基"}:
-            continue
-
-        spec = filter_constraint_specs.get(key, None)
-        if spec is None or spec == 0:
-            continue
-        lower_bound = 1 if spec == ">=1" else int(spec)
-        for atom, count in atoms.items():
-            if atom == "h":
-                continue
-            required[atom] += count * lower_bound
-
-    if has_total_oh_constraint:
-        total_oh_lower = 1 if total_oh_spec == ">=1" else int(total_oh_spec)
-        required["o"] += total_oh_lower
-
-    return required
-
-
 def validate_inputs(
     c: int,
     h: int,
@@ -327,14 +333,17 @@ def validate_inputs(
     if c < 6 :
         errors.append("当前程序只支持苯环骨架，因此化学式至少应当覆盖苯环骨架")
 
-    min_required_atoms = estimate_min_required_atoms(filter_constraint_specs)
-    actual_atoms = {"c": c, "h": h, "o": o, "n": n, "cl": cl, "br": br}
-    atom_labels = {"c": "C", "h": "H", "o": "O", "n": "N", "cl": "Cl", "br": "Br"}
-    for atom_key, need in min_required_atoms.items():
-        if actual_atoms[atom_key] < need:
-            errors.append(
-                f"化学式中的 {atom_labels[atom_key]} 原子数不足：至少需要 {need} 个，但当前只有 {actual_atoms[atom_key]} 个"
-            )
+    if o == 0 and any(
+        has_positive_requirement(filter_constraint_specs.get(key, None))
+        for key in OXYGEN_FEATURE_KEYS
+    ):
+        errors.append("当前筛选条件要求至少存在含氧特征，但化学式中的 O 原子数为 0")
+
+    if n == 0 and any(
+        has_positive_requirement(filter_constraint_specs.get(key, None))
+        for key in NITROGEN_FEATURE_KEYS
+    ):
+        errors.append("当前筛选条件要求至少存在含氮特征，但化学式中的 N 原子数为 0")
 
     unique_h_total_spec = filter_constraint_specs.get("不等同氢总数", None)
     if isinstance(unique_h_total_spec, int) and unique_h_total_spec > h:
@@ -589,16 +598,11 @@ if run_btn:
             st.dataframe(table, use_container_width=True, hide_index=True)
 
         st.subheader("结构图预览")
-        max_show = st.slider(
-            "最多展示多少个结构图",
-            min_value=1,
-            max_value=80,
-            value=min(24, max(1, len(res.passed))),
-            step=1,
-        )
+        MAX_SHOW = 100
+        st.caption(f"为保证页面响应速度，结构图最多展示前 {MAX_SHOW} 个；完整结果请以上方特征表为准。")
 
         cols = st.columns(4)
-        for i, smi in enumerate(res.passed[:max_show]):
+        for i, smi in enumerate(res.passed[:MAX_SHOW]):
             col = cols[i % 4]
             image = render_to_file(smi, width=400, height=400)
             with col:
